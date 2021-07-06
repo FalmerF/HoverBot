@@ -1,2 +1,2 @@
 # HoverBot
-Univiral Bot fo Discord
+Univiral Bot for Discord
