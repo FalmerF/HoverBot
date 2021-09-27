@@ -2,17 +2,18 @@ import discord
 import asyncio
 from discord.ext import commands
 import sqlite3
+
+from discord_slash import ButtonStyle
+from discord_slash.utils import manage_components
+
 import Config
 from datetime import datetime, timedelta
 import os
 import Utils
+import DataBase
 from Utils import EmbedCreate, ArgumentsEmbedCreate, AccessEmbedCreate, check_admin_roles
 
-conn = sqlite3.connect(f"../Discord.db")
-cursor = conn.cursor()
-
 last_Messages = []
-
 
 class AdminCommands(commands.Cog):
     def __init__(self, bot):
@@ -26,15 +27,25 @@ class AdminCommands(commands.Cog):
         embed_obj.add_field(name="`!setvoice`", value=f"Изменить статистику голосового чата участника.")
         embed_obj.add_field(name="`!setmoney`", value=f"Изменить баланс участника.")
         embed_obj.add_field(name="`!addmoney`", value=f"Добавить сумму к балансу участника.")
-        embed_obj.add_field(name="`!pembed`", value=f"Создание embed сообщений.")
+        embed_obj.add_field(name="`!setr`", value=f"Изменить репутацию участника.")
+        embed_obj.add_field(name="`!addr`", value=f"Добавить репутацию участнику.")
+        embed_obj.add_field(name="`!embed`", value=f"Создание embed сообщений.")
+        embed_obj.add_field(name="`!pembed` | `!pe`", value=f"Конструктор embed сообщений.")
         embed_obj.add_field(name="`!setb`", value=f"Установить список значков.")
         embed_obj.add_field(name="`!colors`", value=f"Что?")
-        embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
-        message = await ctx.send(embed=embed_obj)
+        embed_obj.set_footer(text=Utils.RequestedText(ctx))
+
+        buttons = [
+            manage_components.create_button(
+                style=ButtonStyle.red,
+                emoji=self.bot.get_emoji(id=Config.cancel_emoji),
+                custom_id='1000'
+            ),
+        ]
+        action_row = manage_components.create_actionrow(*buttons)
+        message = await ctx.send(embed=embed_obj, components=[action_row])
         await ctx.message.delete()
         Utils.AddEventedMessage(ctx, message, 'help')
-
-        await message.add_reaction(Config.cancel_reaction)
 
     @helpadmin.error
     async def helpadmin_error(self, ctx, error):
@@ -45,19 +56,43 @@ class AdminCommands(commands.Cog):
 
     @commands.command()
     @commands.check(check_admin_roles)
+    async def totalhelp(self, ctx, *args):
+        embed_obj = discord.Embed(title="**Команды для управления БД сервера**", color=Config.embedCol)
+        embed_obj.add_field(name="`!totalcls`", value=f"Полностью очистить данные участников сервера.")
+        embed_obj.set_footer(text=Utils.RequestedText(ctx))
+
+        buttons = [
+            manage_components.create_button(
+                style=ButtonStyle.red,
+                emoji=self.bot.get_emoji(id=Config.cancel_emoji),
+                custom_id='1000'
+            ),
+        ]
+        action_row = manage_components.create_actionrow(*buttons)
+        message = await ctx.send(embed=embed_obj, components=[action_row])
+        await ctx.message.delete()
+        Utils.AddEventedMessage(ctx, message, 'help')
+
+    @totalhelp.error
+    async def totalhelp_error(self, ctx, error):
+        if isinstance(error, commands.errors.MissingAnyRole) or isinstance(error, commands.errors.CheckFailure):
+            embed_obj = await AccessEmbedCreate(ctx)
+            await ctx.send(embed=embed_obj)
+            await ctx.message.delete()
+
+    @commands.command()
+    @commands.check(check_admin_roles)
+    async def totalcls(self, ctx, *args):
+        return
+
+    @totalcls.error
+    async def totalcls_error(self, ctx, *args):
+        return
+
+    @commands.command()
+    @commands.check(check_admin_roles)
     async def helpembed(self, ctx, *args):
         embed_obj = discord.Embed(title="**Параметры Embed сообщений**", color=Config.embedCol)
-        # embed_obj.add_field(name="・title", value=f"Пример: `title=Title_Text`")
-        # embed_obj.add_field(name="・color", value=f"Пример: `color=blue`")
-        # embed_obj.add_field(name="・authorname", value=f"Пример: `authorname=Author_Name`")
-        # embed_obj.add_field(name="・authorurl", value=f"Пример: `authorurl=some_url`")
-        # embed_obj.add_field(name="・authoriconurl", value=f"Пример: `authoriconurl=some_url`")
-        # embed_obj.add_field(name="・footertext", value=f"Пример: `footertext=Footer_Text`")
-        # embed_obj.add_field(name="・footerurl", value=f"Пример: `footerurl=some_url`")
-        # embed_obj.add_field(name="・reactions", value=f"Пример: `reactions=:cookie:|:tada:|:heart:`")
-        # embed_obj.add_field(name="・imageurl", value=f"Пример: `imageurl=some_url`")
-        # embed_obj.add_field(name="・thumbnailurl", value=f"Пример: `thumbnailurl=some_url`")
-        # embed_obj.add_field(name="・addfield", value=f"Пример: `addfield=Field_Name,Field_Value,False`")
         embed_obj.add_field(name="Параметры", value=f'''・**title**=Title_Text
                 ・**color**=blue
                 ・**authorname**=Author_Name
@@ -68,6 +103,7 @@ class AdminCommands(commands.Cog):
                 ・**reactions**=:cookie:|:tada:|:heart:
                 ・**imageurl**=some_url
                 ・**addfield**=Field_Name,Field_Value,False
+                ・**thumbnailurl**=some_url
                 ''')
         embed_obj.add_field(name="Переменные", value='''・**{author.name}**
         ・**{author.display_name}**
@@ -84,12 +120,18 @@ class AdminCommands(commands.Cog):
         ・**{author.owner.discriminator}**
         ''')
 
-        embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
-        message = await ctx.send(embed=embed_obj)
+        embed_obj.set_footer(text=Utils.RequestedText(ctx))
+        buttons = [
+            manage_components.create_button(
+                style=ButtonStyle.red,
+                emoji=self.bot.get_emoji(id=Config.cancel_emoji),
+                custom_id='1000'
+            ),
+        ]
+        action_row = manage_components.create_actionrow(*buttons)
+        message = await ctx.send(embed=embed_obj, components=[action_row])
         await ctx.message.delete()
         Utils.AddEventedMessage(ctx, message, 'help')
-
-        await message.add_reaction(Config.cancel_reaction)
 
     @helpadmin.error
     async def helpembed_error(self, ctx, error):
@@ -104,8 +146,11 @@ class AdminCommands(commands.Cog):
         title = ''
         colorName = ''
         thumbnailUrl = ''
+        content = ''
         imageUrl = ''
         emojisName = []
+        roles = ''
+        emojis = ''
         authorName = ''
         authorUrl = ''
         authorIconUrl = ''
@@ -143,6 +188,10 @@ class AdminCommands(commands.Cog):
             elif word.startswith('reactions='):
                 word = word.replace('reactions=', '')
                 emojisName = word.split('|')
+                emojis = word.replace('|', ' ')
+            elif word.startswith('roles='):
+                word = word.replace('roles=', '')
+                roles = word.replace('<@&', '').replace('>', '').replace('|', ' ')
 
             elif word.startswith('imageurl='):
                 imageUrl = word.replace('imageurl=', '')
@@ -155,6 +204,10 @@ class AdminCommands(commands.Cog):
                 field = word.replace('addfield=', '').split(',')
                 embed_obj.add_field(name=Utils.EmbedParseVars(ctx, field[0]), value=Utils.EmbedParseVars(ctx, field[1]),
                                     inline=field[2])
+
+            elif word.startswith('content='):
+                content = word.replace('content=', '')
+                content = Utils.EmbedParseVars(ctx, content, True)
 
             else:
                 word = word.replace('\\n', '\n')
@@ -185,7 +238,9 @@ class AdminCommands(commands.Cog):
         embed_obj.set_author(name=authorName, url=authorUrl, icon_url=authorIconUrl)
         embed_obj.set_footer(text=footerText, icon_url=footerUrl)
 
-        message = await ctx.send(embed=embed_obj)
+        message = await ctx.send(content=content, embed=embed_obj)
+
+        DataBase.insertDataInDB('customMessages', f'{message.guild.id}, {message.id}, {message.channel.id}, "{emojis}", "{roles}"')
 
         await ctx.message.delete()
         for name in emojisName:
@@ -217,37 +272,33 @@ class AdminCommands(commands.Cog):
 
         if action == 'set':
             embed_obj = discord.Embed(color=Config.blueCol)
-            embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
+            embed_obj.set_footer(text=Utils.RequestedText(ctx))
 
-            cursor.execute(f'SELECT text FROM embed where nameembed="{name}" AND guild={ctx.guild.id}')
-            table_result = cursor.fetchone()
+            table_result = DataBase.getDataFromDB('embed', f'text', f'nameembed="{name}" AND guild={ctx.guild.id}')
             if table_result is not None:
                 oldText = table_result[0]
             else:
                 oldText = ''
 
             if oldText == '':
-                cursor.execute(f'INSERT INTO embed VALUES ({ctx.guild.id}, "{name}", "{fullText}")')
+                DataBase.insertDataInDB('embed', f'{ctx.guild.id}, "{name}", "{fullText}"')
                 embed_obj.description = f'Сообщение `{name}` успешно добавлено.'
             else:
-                cursor.execute(f'UPDATE embed SET text=? where nameembed=? AND guild=?', (fullText, name, ctx.guild.id))
+                DataBase.updateDataInDB('embed', f'text="{fullText}"', f'nameembed="{name}" AND guild={ctx.guild.id}')
                 embed_obj.description = f'Сообщение `{name}` успешно изменено.'
 
-            conn.commit()
             await AdminCommands.pembed(self, ctx, 'send', name)
             await ctx.send(embed=embed_obj)
 
         elif action == 'del':
             embed_obj = discord.Embed(color=Config.blueCol)
-            embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
-            cursor.execute(f'SELECT text FROM embed where nameembed="{name}" AND guild={ctx.guild.id}')
-            oldText = cursor.fetchone()[0]
+            embed_obj.set_footer(text=Utils.RequestedText(ctx))
+            oldText = DataBase.getDataFromDB('embed', 'text', f'nameembed="{name}" AND guild={ctx.guild.id}')
 
             if oldText == '':
                 embed_obj.description = f'Сообщение `{name}` не найдено.'
             else:
-                cursor.execute(f'DELETE FROM embed where nameembed="{name}" AND guild={ctx.guild.id}')
-                conn.commit()
+                DataBase.deleteDataFromDB('embed',f'nameembed="{name}" AND guild={ctx.guild.id}')
                 embed_obj.description = f'Сообщение `{name}` успешно удалено.'
 
             await ctx.send(embed=embed_obj)
@@ -255,10 +306,9 @@ class AdminCommands(commands.Cog):
 
         elif action == 'get':
             embed_obj = discord.Embed(color=Config.blueCol)
-            embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
+            embed_obj.set_footer(text=Utils.RequestedText(ctx))
 
-            cursor.execute(f'SELECT text FROM embed where nameembed="{name}" AND guild={ctx.guild.id}')
-            oldText = cursor.fetchone()[0]
+            oldText = DataBase.getDataFromDB('embed', 'text', f'nameembed="{name}" AND guild={ctx.guild.id}')[0]
 
             oldText = oldText.replace('\\n', '\\n\n')
             if oldText == '':
@@ -270,8 +320,7 @@ class AdminCommands(commands.Cog):
             await ctx.message.delete()
 
         elif action == 'send':
-            cursor.execute(f'SELECT text FROM embed where nameembed="{name}" AND guild={ctx.guild.id}')
-            table_result = cursor.fetchone()
+            table_result = DataBase.getDataFromDB('embed', 'text', f'nameembed="{name}" AND guild={ctx.guild.id}')
             if table_result is not None:
                 oldText = table_result[0]
             else:
@@ -279,7 +328,7 @@ class AdminCommands(commands.Cog):
 
             if oldText == '':
                 embed_obj = discord.Embed(color=Config.blueCol)
-                embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
+                embed_obj.set_footer(text=Utils.RequestedText(ctx))
                 embed_obj.description = f'Сообщение `{name}` не найдено.'
                 await ctx.send(embed=embed_obj)
                 await ctx.message.delete()
@@ -291,16 +340,29 @@ class AdminCommands(commands.Cog):
 
         elif action == 'list':
             embed_obj = await Utils.pembed_list_get(1, ctx.guild.id)
-            embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
+            embed_obj.set_footer(text=Utils.RequestedText(ctx))
 
-            message = await ctx.send(embed=embed_obj)
+            buttons = [
+                manage_components.create_button(
+                    style=ButtonStyle.green,
+                    emoji=self.bot.get_emoji(id=Config.previous_emoji),
+                    custom_id='1001'
+                ),
+                manage_components.create_button(
+                    style=ButtonStyle.green,
+                    emoji=self.bot.get_emoji(id=Config.next_emoji),
+                    custom_id='1002'
+                ),
+                manage_components.create_button(
+                    style=ButtonStyle.red,
+                    emoji=self.bot.get_emoji(id=Config.cancel_emoji),
+                    custom_id='1000'
+                ),
+            ]
+            action_row = manage_components.create_actionrow(*buttons)
+            message = await ctx.send(embed=embed_obj, components=[action_row])
             await ctx.message.delete()
-
             Utils.AddEventedMessage(ctx, message, 'embedlist')
-
-            await message.add_reaction(Config.previous_reaction)
-            await message.add_reaction(Config.next_reaction)
-            await message.add_reaction(Config.cancel_reaction)
         else:
             embed_obj = await ArgumentsEmbedCreate(ctx, f'''`!pembed set <имя> <текст>`
                         `!pembed del <имя>`
@@ -318,7 +380,6 @@ class AdminCommands(commands.Cog):
             await ctx.send(embed=embed_obj)
             await ctx.message.delete()
         else:
-            print(error)
             embed_obj = await ArgumentsEmbedCreate(ctx, f'''`!pembed set <имя> <текст>`
             `!pembed del <имя>`
             `!pembed get <имя>`
@@ -342,15 +403,14 @@ class AdminCommands(commands.Cog):
     async def setxp(self, ctx, user: discord.Member, lvl: int, xp: int, *args):
         uid = user.id
         embed_obj = await EmbedCreate(description=f'Ранг изменен.', color=Config.blueCol,
-                                      footerText=Utils.RequestedText(ctx.author))
+                                      footerText=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
 
         lvl = max(min(lvl, 1000), 0)
 
-        cursor.execute(f'UPDATE users SET level=? where id=? AND guild=?', (lvl, uid, ctx.guild.id))
-        cursor.execute(f'UPDATE users SET xp=? where id=? AND guild=?', (0, uid, ctx.guild.id))
-        conn.commit()
-        await Utils.xpadd(xp, user)
+        DataBase.updateDataInDB('users', f'level={lvl}', f'id={uid} AND guild={ctx.guild.id}')
+        DataBase.updateDataInDB('users', f'xp=0', f'id={uid} AND guild={ctx.guild.id}')
+        await Utils.xpadd(xp, user, False)
 
         await ctx.message.delete()
 
@@ -371,13 +431,12 @@ class AdminCommands(commands.Cog):
         uid = user.id
 
         embed_obj = await EmbedCreate(description=f'Голосовая активность изменена.', color=Config.blueCol,
-                                      footerText=Utils.RequestedText(ctx.author))
+                                      footerText=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
 
         time = (h * 3600) + (m * 60)
 
-        cursor.execute(f'UPDATE users SET voice=? where id=? AND guild=?', (time, uid, ctx.guild.id))
-        conn.commit()
+        DataBase.updateDataInDB('users', f'voice={time}', f'id={uid} AND guild={ctx.guild.id}')
 
         await ctx.message.delete()
 
@@ -394,16 +453,66 @@ class AdminCommands(commands.Cog):
 
     @commands.command()
     @commands.check(check_admin_roles)
+    async def setr(self, ctx, user: discord.User, rep: int, *args):
+        uid = user.id
+        embed_obj = await EmbedCreate(
+            description=f'Репутация участника **<@{user.id}>** изменена на **{rep}** {Config.reputation_reaction}',
+            color=Config.blueCol,
+            footerText=Utils.RequestedText(ctx))
+        await ctx.send(embed=embed_obj)
+
+        DataBase.updateDataInDB('users', f'reputation={rep}', f'id={uid} AND guild={ctx.guild.id}')
+
+        await ctx.message.delete()
+
+    @setr.error
+    async def setr_error(self, ctx, error):
+        if isinstance(error, commands.errors.CheckFailure):
+            embed_obj = await AccessEmbedCreate(ctx)
+            await ctx.send(embed=embed_obj)
+            await ctx.message.delete()
+        else:
+            embed_obj = await ArgumentsEmbedCreate(ctx, f'`!setr @user <репутация>`')
+            await ctx.send(embed=embed_obj)
+            await ctx.message.delete()
+
+    @commands.command()
+    @commands.check(check_admin_roles)
+    async def addr(self, ctx, user: discord.User, rep: int, *args):
+        uid = user.id
+        reputation = DataBase.getDataFromDB('users', 'reputation', f'id={uid} AND guild={ctx.guild.id}')[0]
+        reputation += rep
+        DataBase.updateDataInDB('users', f'reputation={reputation}', f'id={uid} AND guild={ctx.guild.id}')
+
+        embed_obj = await EmbedCreate(
+            description=f'Репутация участника **<@{user.id}>** {("повышена" if (rep>0) else "понижена")} на **{abs(rep)}** {Config.reputation_reaction}',
+            color=Config.blueCol,
+            footerText=Utils.RequestedText(ctx))
+        await ctx.send(embed=embed_obj)
+        await ctx.message.delete()
+
+    @addr.error
+    async def addr_error(self, ctx, error):
+        if isinstance(error, commands.errors.CheckFailure):
+            embed_obj = await AccessEmbedCreate(ctx)
+            await ctx.send(embed=embed_obj)
+            await ctx.message.delete()
+        else:
+            embed_obj = await ArgumentsEmbedCreate(ctx, f'`!addr @user <репутация>`')
+            await ctx.send(embed=embed_obj)
+            await ctx.message.delete()
+
+    @commands.command()
+    @commands.check(check_admin_roles)
     async def setmoney(self, ctx, user: discord.User, sum: int, *args):
         uid = user.id
         embed_obj = await EmbedCreate(
-            description=f'Счет участника {user.name}#{user.discriminator} изменен на **{sum}** :gem:',
+            description=f'Счет участника **<@{user.id}>** изменен на **{sum}** {Config.money_reaction}',
             color=Config.blueCol,
-            footerText=Utils.RequestedText(ctx.author))
+            footerText=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
 
-        cursor.execute(f'UPDATE users SET money=? where id=? AND guild=?', (sum, uid, ctx.guild.id))
-        conn.commit()
+        DataBase.updateDataInDB('users', f'money={sum}', f'id={uid} AND guild={ctx.guild.id}')
 
         await ctx.message.delete()
 
@@ -422,16 +531,14 @@ class AdminCommands(commands.Cog):
     @commands.check(check_admin_roles)
     async def addmoney(self, ctx, user: discord.User, sum: int, *args):
         uid = user.id
-        cursor.execute(f"SELECT money FROM users where id={uid} AND guild={ctx.guild.id}")
-        money = cursor.fetchone()[0]
+        money = DataBase.getDataFromDB('users', 'money', f'id={uid} AND guild={ctx.guild.id}')[0]
         money += sum
-        cursor.execute(f'UPDATE users SET money=? where id=? AND guild=?', (money, uid, ctx.guild.id))
-        conn.commit()
+        DataBase.updateDataInDB('users', f'money={money}', f'id={uid} AND guild={ctx.guild.id}')
 
         embed_obj = await EmbedCreate(
-            description=f'На счет участника {user.name}#{user.discriminator} добавлено **{sum}** :gem:',
+            description=f'Cчет участника **<@{user.id}>** {("увеличен" if (sum>0) else "уменьшен")} на **{abs(sum)}** {Config.money_reaction}',
             color=Config.blueCol,
-            footerText=Utils.RequestedText(ctx.author))
+            footerText=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
         await ctx.message.delete()
 
@@ -450,19 +557,19 @@ class AdminCommands(commands.Cog):
     @commands.check(check_admin_roles)
     async def colors(self, ctx, *args):
         embed_obj = discord.Embed(title="**Зеленый**", color=Config.greenCol)
-        embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
+        embed_obj.set_footer(text=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
 
         embed_obj = discord.Embed(title="**Жёлтый**", color=Config.yellowCol)
-        embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
+        embed_obj.set_footer(text=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
 
         embed_obj = discord.Embed(title="**Красный**", color=Config.redCol)
-        embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
+        embed_obj.set_footer(text=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
 
         embed_obj = discord.Embed(title="**Синий**", color=Config.blueCol)
-        embed_obj.set_footer(text=Utils.RequestedText(ctx.author))
+        embed_obj.set_footer(text=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
 
         await ctx.message.delete()
@@ -480,7 +587,7 @@ class AdminCommands(commands.Cog):
         guild = ctx.guild
         embed_obj = await EmbedCreate(description=f'Начата выдача роли <@&{role.id}> всем участникам сервера.',
                                       color=Config.blueCol,
-                                      footerText=Utils.RequestedText(ctx.author))
+                                      footerText=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
         await ctx.message.delete()
         for member in guild.members:
@@ -489,7 +596,7 @@ class AdminCommands(commands.Cog):
 
         embed_obj = await EmbedCreate(description=f'Выдача роли <@&{role.id}> всем участникам сервера завершена.',
                                       color=Config.greenCol,
-                                      footerText=Utils.RequestedText(ctx.author))
+                                      footerText=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
 
     @autoroles.error
@@ -507,15 +614,14 @@ class AdminCommands(commands.Cog):
     @commands.check(check_admin_roles)
     async def setb(self, ctx, user: discord.Member, *badges):
         embed_obj = await EmbedCreate(description=f'Список значков изменен.', color=Config.blueCol,
-                                      footerText=Utils.RequestedText(ctx.author))
+                                      footerText=Utils.RequestedText(ctx))
         await ctx.send(embed=embed_obj)
 
         fullBadges = ''
         for b in badges:
             fullBadges += f'{b} '
 
-        cursor.execute(f'UPDATE users SET badges=? where id=? AND guild=?', (fullBadges, user.id, ctx.guild.id))
-        conn.commit()
+        DataBase.updateDataInDB('users', f'badges="{fullBadges}"', f'id={user.id} AND guild={ctx.guild.id}')
         await ctx.message.delete()
 
     @setb.error

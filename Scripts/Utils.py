@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime, timedelta
 import os
 
+from discord import utils
 from pip._vendor import requests
 
 import Config
@@ -15,46 +16,32 @@ from PIL import ImageDraw
 
 from io import BytesIO
 
-conn = sqlite3.connect(f"../Discord.db")
-cursor = conn.cursor()
+import DataBase
 
 
 async def add_New_User(user: discord.User, guild_id: int):
-    cursor.execute(f'''INSERT INTO users VALUES (
-        {user.id},
-        0, 
-        0, 
-        {guild_id}, 
-        0, 
-        0, 
-        0, 
-        "{datetime.today()}",
-        ""
-        )''')
-    conn.commit()
+    DataBase.insertDataInDB('users', f'{user.id}, 0, 0, {guild_id}, 0, 0, 0, "{datetime.today()}", "", {Config.startReputation}')
 
 
 async def add_New_Guild(guild_id: int):
-    cursor.execute(f'''INSERT INTO settings VALUES ({guild_id},
-    0,
-    0,
-    "",
-    "",
-    0,
-    0,
-    1,
-    0)''')
-    conn.commit()
+    DataBase.insertDataInDB('settings', f'{guild_id}, 0, 0, "", "", 0, 1, 0, "", "", "", "", "", ""')
 
 
 async def member_voice_xp_add(member: discord.Member, multiplier_members: int):
-    cursor.execute(f"SELECT enterTime FROM users where id={member.id} AND guild={member.guild.id}")
-    duration = datetime.today() - datetime.strptime(cursor.fetchone()[0], '%Y-%m-%d %H:%M:%S.%f')
+    row = DataBase.getDataFromDB('users', 'enterTime', f'id={member.id} AND guild={member.guild.id}')
+    duration = timedelta(seconds=0)
+    if row != None:
+        duration = datetime.today() - datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S.%f')
 
-    cursor.execute(f"SELECT xpMultiplier, maxMembers FROM settings where guild={member.guild.id}")
-    row = cursor.fetchone()
+    row = DataBase.getDataFromDB('settings', 'xpMultiplier, maxMembers', f'guild={member.guild.id}')
     multiplier = row[0]
     maxMembers = row[1]
+
+    # money = DataBase.getDataFromDB('users', 'money', f'id={member.id} AND guild={member.guild.id}', 'all')[0]
+    # money += int((duration.seconds/60)*6)
+    # DataBase.updateDataInDB('users', f'money={money}', f'id={member.id} AND guild={member.guild.id}')
+    # Удалить, если все работает!
+    await addMoneyToUser(member, member.guild.id, int((duration.seconds / 60 * 6)))
 
     multiplier_members = min(multiplier, maxMembers)
     if multiplier_members == 1:
@@ -62,20 +49,21 @@ async def member_voice_xp_add(member: discord.Member, multiplier_members: int):
 
     await xpadd(int(6 * (duration.seconds / 60) * multiplier * multiplier_members), member)
 
-    cursor.execute(f"SELECT voice FROM users where id={member.id} AND guild={member.guild.id}")
-    cursor.execute(f'UPDATE users SET voice=? where id=? AND guild=?',
-                   (cursor.fetchone()[0] + duration.seconds, member.id, member.guild.id))
-    cursor.execute(f'UPDATE users SET enterTime=? where id=? AND guild=?',
-                   (datetime.today(), member.id, member.guild.id))
-    conn.commit()
+    voiceSeconds = 0
+    row = DataBase.getDataFromDB('users', 'voice', f'id={member.id} AND guild={member.guild.id}')
+    if row is not None:
+        voiceSeconds = row[0]
+
+    DataBase.updateDataInDB('users', f'voice="{voiceSeconds + duration.seconds}"', f'id={member.id} AND guild={member.guild.id}')
+    DataBase.updateDataInDB('users', f'enterTime="{datetime.today()}"', f'id={member.id} AND guild={member.guild.id}')
 
 
 async def shop_get(page: int, guild_id: int):
     desc = ''
-    roles = [row[0] for row in cursor.execute(f"SELECT shopRoles FROM settings where guild={guild_id}")]
+    roles = [row[0] for row in DataBase.getDataFromDB('settings', 'shopRoles', f'guild={guild_id}', 'all')]
     rolesArray = roles[0].split(" ")
     del rolesArray[-1]
-    costs = [row[0] for row in cursor.execute(f"SELECT shopRolesCost FROM settings where guild={guild_id}")]
+    costs = [row[0] for row in DataBase.getDataFromDB('settings', 'shopRolesCost', f'guild={guild_id}', 'all')]
     costsArray = costs[0].split(" ")
     del costsArray[-1]
 
@@ -90,7 +78,7 @@ async def shop_get(page: int, guild_id: int):
     embed_obj = discord.Embed(title="**Магазин Ролей**", color=Config.embedCol)
     while i < num:
         if i < len(rolesArray):
-            desc += f'**#{i + 1}.** <@&{rolesArray[i]}> **- {costsArray[i]}** :gem:\n'
+            desc += f'**#{i + 1}.** <@&{rolesArray[i]}> **- {makePointedNumber(costsArray[i])}** {Config.money_reaction}\n'
 
         i += 1
 
@@ -100,15 +88,42 @@ async def shop_get(page: int, guild_id: int):
     return embed_obj
 
 
-async def xpadd(xp: int, member):
+def makePointedNumber(arg: str):
+    charsList = list(f'{arg}')
+    i = len(charsList)-1
+    numbersCounter = 0
+    pointedNumber = ''
+    while i >= 0:
+        pointedNumber = charsList[i] + pointedNumber
+        numbersCounter += 1
+        if i != 0 and numbersCounter % 3 == 0:
+            pointedNumber = f'.{pointedNumber}'
+        i -= 1
+    return pointedNumber
+
+
+async def xpadd(xp: int, member: discord.Member, useMultiplier=True):
+    if member.bot:
+        return
+
     id = member.id
-    cursor.execute(f"SELECT xp FROM users where id={id} AND guild={member.guild.id}")
-    playerXp = cursor.fetchone()[0]
-    playerXp += xp
+    playerXp = 0
+    level = 0
+    multiplier = 1.0
+
+    if useMultiplier:
+        multiplier = await getMultiplierFromMemberRoles(member, False)
+    row = DataBase.getDataFromDB('users', 'xp', f'id={id} AND guild={member.guild.id}')
+    if row is not None:
+        playerXp = row[0]
+    playerXp += xp*multiplier
     playerXp = round(playerXp)
 
-    cursor.execute(f"SELECT level FROM users where id={id} AND guild={member.guild.id}")
-    level = cursor.fetchone()[0]
+    row = DataBase.getDataFromDB('users', 'level', f'id={id} AND guild={member.guild.id}')
+    if row is not None:
+        level = row[0]
+    oldLevel = level
+    giveNextRole = False
 
     while True:
         xpToLevel = Config.RANKS[f'{min(level + 1, 1000)}']
@@ -119,12 +134,54 @@ async def xpadd(xp: int, member):
         if xpToLevel <= playerXp:
             playerXp -= xpToLevel
             level += 1
-            cursor.execute(f'UPDATE users SET level=? where id=? AND guild=?', (level, id, member.guild.id))
+            levelChanged = True
+            DataBase.updateDataInDB('users', f'level={level}', f'id={id} AND guild={member.guild.id}')
         else:
             break
 
-    cursor.execute(f'UPDATE users SET xp=? where id=? AND guild=?', (playerXp, id, member.guild.id))
-    conn.commit()
+    for roleLevel in Config.levelDict:
+        if oldLevel < roleLevel <= level:
+            giveNextRole = True
+            break
+
+    if giveNextRole:
+        i = len(Config.levelDict)-1
+        while i >= 0:
+            if level >= Config.levelDict[i]:
+                await removeAllLevelRolesFromMember(member)
+                role = utils.get(member.guild.roles, id=Config.rolesPerLevel[Config.levelDict[i]])
+                await member.add_roles(role)
+                break
+            i -= 1
+
+    DataBase.updateDataInDB('users', f'xp={playerXp}', f'id={id} AND guild={member.guild.id}')
+
+
+async def getMultiplierFromMemberRoles(member: discord.Member, moneyMultiplier: bool):
+    row = None
+    if moneyMultiplier:
+        row = DataBase.getDataFromDB('settings', f'moneyBoostRoles', f'guild={member.guild.id}')
+    else:
+        row = DataBase.getDataFromDB('settings', f'xpBoostRoles', f'guild={member.guild.id}')
+
+    multiplier = 1.0
+    for roleData in row[0].split(' '):
+        if roleData != '':
+            data = roleData.split('=')
+            for role in member.roles:
+                if f'{role.id}' == data[0] and float(data[1]) > multiplier:
+                    multiplier = float(data[1])
+    return multiplier
+
+
+async def removeAllLevelRolesFromMember(member):
+    for key in Config.rolesPerLevel:
+        try:
+            role = utils.get(member.guild.roles, id=Config.rolesPerLevel[key])
+            member.roles.index(role)
+            await member.remove_roles(role)
+        except Exception:
+            pass
 
 
 async def EmbedCreate(description='', title='', color='', author='', authorAvatar='', thumbnailUrl='', imageUrl='', footerText='', footerUrl='', fields=[['', '', False]]):
@@ -157,13 +214,14 @@ async def AccessEmbedCreate(ctx):
 def keyFunc(item):
    return item[1]
 
-
 def keyFunc2(item):
    return item[2]
 
-
 def keyFunc3(item):
    return item[3]
+
+def keyFunc4(item):
+   return item[4]
 
 
 async def topget(page: int, type: str, guild: discord.Guild):
@@ -171,12 +229,11 @@ async def topget(page: int, type: str, guild: discord.Guild):
 
     guild_id = guild.id
 
-    cursor.execute(f"SELECT id, level, voice, money FROM users where guild={guild_id}")
-    users = cursor.fetchall()
+    users = DataBase.getDataFromDB('users', 'id, level, voice, money, reputation', f'guild={guild_id}', 'all')
     for row in users:
         member = guild.get_member(int(row[0]))
-        if not member.bot and not check_admin_roles_from_user(member):
-            Ids.append((row[0], row[1], row[2], row[3]))
+        if member is not None and not member.bot and not check_admin_roles_from_user(member):
+            Ids.append((row[0], row[1], row[2], row[3], row[4]))
 
     if type == "level":
         Ids.sort(key=keyFunc, reverse=True)
@@ -184,6 +241,8 @@ async def topget(page: int, type: str, guild: discord.Guild):
         Ids.sort(key=keyFunc2, reverse=True)
     elif type == "money":
         Ids.sort(key=keyFunc3, reverse=True)
+    elif type == "rep":
+        Ids.sort(key=keyFunc4, reverse=True)
 
     maxPage = math.floor(len(Ids)/10)
     if len(Ids)%10 > 0:
@@ -202,6 +261,7 @@ async def topget(page: int, type: str, guild: discord.Guild):
             level = Ids[i][1]
             voice = Ids[i][2]
             money = Ids[i][3]
+            reputation = Ids[i][4]
             if id != 0:
                 member = guild.get_member(int(id))
                 if member is None:
@@ -222,7 +282,10 @@ async def topget(page: int, type: str, guild: discord.Guild):
                     mTxt = f'0{m}'
                 if s < 10:
                     sTxt = f'0{s}'
-                embed_obj.add_field(name=f'**#{i + 1}.** {member.display_name}', value=f'Уровень: {level}  |  :gem: {money}  |  :microphone: {hTxt}:{mTxt}:{sTxt}',inline=False)
+                embed_obj.add_field(
+                    name=f'**#{i + 1}.** {member.display_name}',
+                    value=f'Уровень: `{level}`  |  {Config.reputation_reaction} `{reputation}`  |  {Config.money_reaction} `{money}`  |  :microphone: `{hTxt}:{mTxt}:{sTxt}`',
+                    inline=False)
 
         i += 1
 
@@ -238,7 +301,7 @@ def check_admin_roles(ctx):
 
 
 def check_moder_roles(ctx):
-    roles = [row[0] for row in cursor.execute(f"SELECT ModerRoles FROM settings where guild={ctx.guild.id}")]
+    roles = [row[0] for row in DataBase.getDataFromDB('settings', 'ModerRoles', f'guild={ctx.guild.id}')]
     rolesArray = roles[0].split(" ")
     del rolesArray[-1]
     for role in rolesArray:
@@ -256,7 +319,7 @@ def check_admin_roles_from_user(member: discord.member):
 
 
 def check_moder_roles_from_user(member: discord.member):
-    roles = [row[0] for row in cursor.execute(f"SELECT ModerRoles FROM settings where guild={member.guild.id}")]
+    roles = [row[0] for row in DataBase.getDataFromDB('settings', 'ModerRoles', f'guild={member.guild.id}')]
     rolesArray = roles[0].split(" ")
     del rolesArray[-1]
     for role in rolesArray:
@@ -271,7 +334,7 @@ async def pembed_list_get(page: int, guild_id: int):
     embed_obj.title = 'Список сообщений'
     embedNames = ''
     names = []
-    for row in cursor.execute(f"SELECT nameembed FROM embed where guild={guild_id}"):
+    for row in DataBase.getDataFromDB('embed', 'nameembed', f'guild={guild_id}', 'all'):
         names.append(row[0])
 
     maxPage = math.floor(len(names) / 10)
@@ -292,8 +355,7 @@ async def pembed_list_get(page: int, guild_id: int):
     return embed_obj
 
 async def rankMet(ctx, user: discord.member):
-    cursor.execute(f"SELECT xp, level, voice, money FROM users where id={user.id} AND guild={ctx.guild.id}")
-    row = cursor.fetchone()
+    row = DataBase.getDataFromDB('users', 'xp, level, voice, money', f'id={user.id} AND guild={ctx.guild.id}')
     xp = row[0]
     level = row[1]
     voice = row[2]
@@ -434,14 +496,15 @@ async def get_mentions(ids: str, separator: str, mention: str):
     return mention_text
 
 
-def RequestedText(user: discord.User):
-    return f'Запросил {user.name}#{user.discriminator}'
+def RequestedText(ctx):
+    return f'Запросил {ctx.author.name}#{ctx.author.discriminator} | {ctx.bot.command_prefix}{ctx.command}'
+
+def RequestedTextCustom(member, command, bot):
+    return f'Запросил {member.name}#{member.discriminator} | {bot.command_prefix}{command}'
 
 
-def AddEventedMessage(ctx, message: discord.Message, type: str, time: int = 900):
-    cursor.execute(
-        f'INSERT INTO messages VALUES ({message.guild.id}, {message.id}, {message.channel.id}, "{type}", "{datetime.today() + timedelta(seconds=time)}", {ctx.author.id})')
-    conn.commit()
+def AddEventedMessage(ctx, message: discord.Message, type: str, time: int = Config.time_delete_msg):
+    DataBase.insertDataInDB('messages', f'{message.guild.id}, {message.id}, {message.channel.id}, "{type}", "{datetime.today() + timedelta(seconds=time)}", {ctx.author.id}')
 
 
 def EmbedParseVars(ctx, message: str, space: bool = True):
@@ -464,13 +527,13 @@ def EmbedParseVars(ctx, message: str, space: bool = True):
 
 
 async def ProfileCreate(ctx, user: discord.member):
-    cursor.execute(f"SELECT xp, level, voice, money, badges FROM users where id={user.id} AND guild={ctx.guild.id}")
-    row = cursor.fetchone()
+    row = DataBase.getDataFromDB('users', 'xp, level, voice, money, badges, reputation', f'id={user.id} AND guild={ctx.guild.id}')
     xp = row[0]
     level = row[1]
     voice = row[2]
     money = row[3]
     badges = row[4]
+    reputation = row[5]
 
     if level == 1000:
         xpNeed = 1
@@ -501,14 +564,18 @@ async def ProfileCreate(ctx, user: discord.member):
 
     embed_obj = discord.Embed()
     embed_obj.title = f'Профиль {user.name}#{user.discriminator}'
+    embed_obj.set_footer(text=RequestedText(ctx))
     embed_obj.set_thumbnail(url=user.avatar_url)
+    embed_obj.add_field(name=f'Упоминание', value=f'<@{user.id}>')
     embed_obj.add_field(name=f'Активность', value=f'''・Уровень: **{level}**
     ・Опыт: **{xp}/{xpNeed}**
     ・Голос: **{hTxt}:{mTxt}:{sTxt}**
     ''', inline=False)
-    embed_obj.add_field(name=f'Баланс', value=f'''・**{money}** :gem:
+    embed_obj.add_field(name=f'Баланс', value=f'''・**{makePointedNumber(money)}** {Config.money_reaction}
         ''', inline=True)
-    if badges != '':
+    embed_obj.add_field(name=f'Репутация', value=f'''・**{reputation}** {Config.reputation_reaction}
+        ''', inline=True)
+    if ((badges != '') and (badges != None)):
         embed_obj.add_field(name=f'Значки', value=f'''・{badges}
                 ''', inline=True)
 
@@ -516,32 +583,24 @@ async def ProfileCreate(ctx, user: discord.member):
 
 
 async def GetGuildStat(guild: discord.Guild, statType: str):
-    if statType == 'members':
-        num = 0
-        for m in guild.members:
-            if m.bot is True:
-                continue
-            num += 1
-        return f'Members: {num}'
-    elif statType == 'online':
-        num = 0
-        for m in guild.members:
-            if m.status == discord.Status.offline:
-                continue
-            num += 1
-        return f'Online: {num}'
-    elif statType == 'voice':
-        num = 0
-        for v in guild.voice_channels:
-            num += len(v.members)
-        return f'Voice: {num}'
-    elif statType == 'bots':
-        num = 0
-        for m in guild.members:
-            if m.bot is False:
-                continue
-            num += 1
-        return f'Bots: {num}'
+    members = 0
+    bots = 0
+    online = 0
+    voice = 0
+    for m in guild.members:
+        if m.bot is True:
+            bots += 1
+        else:
+            members += 1
+            if m.status != discord.Status.offline:
+                online += 1
+
+    for v in guild.voice_channels:
+        for user in v.members:
+            if not user.bot:
+                voice += 1
+
+    return statType.replace('%members%', f'{members}').replace('%bots%', f'{bots}').replace('%online%', f'{online}').replace('%voice%', f'{voice}')
 
 
 async def ParseStringToTime(*time):
@@ -662,7 +721,7 @@ async def WarnsListGet(page: int, user: discord.User, guild_id: int):
     embed_obj.title = f'Список предупреждений' # {user.name}#{user.discriminator}
     embed_obj.description = f'<@{user.id}>'
     names = []
-    for row in cursor.execute(f'SELECT timeOut, moder, reason, date FROM punishments where guild={guild_id} AND id={user.id} AND type="warn"'):
+    for row in DataBase.getDataFromDB('punishments', 'timeOut, moder, reason, date', f'guild={guild_id} AND id={user.id} AND type="warn"', 'all'):
         names.append(row)
 
     maxInPage = 3
@@ -691,3 +750,154 @@ async def WarnsListGet(page: int, user: discord.User, guild_id: int):
         i += 1
 
     return embed_obj
+
+
+async def send_audit(audit_type: str, guild: discord.Guild, *args):
+    row = DataBase.getDataFromDB('settings', 'audit', f'guild={guild.id}')
+    if row[0] is None:
+        return
+    channel = guild.get_channel(row[0])
+    if audit_type == 'voice_change':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участник **{args[0].display_name}** (<@{args[0].id}>) перешел в другой голосовой канал:'
+        embed_obj.add_field(name="Предыдущий канал", value=f'{args[1].name} (<#{args[1].id}>)')
+        embed_obj.add_field(name="Новый канал", value=f'{args[2].name} (<#{args[2].id}>)')
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'voice_leave':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участник **{args[0].display_name}** (<@{args[0].id}>) вышел с голосового канала:'
+        embed_obj.add_field(name="Канал", value=f'{args[1].name} (<#{args[1].id}>)')
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'voice_join':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участник **{args[0].display_name}** (<@{args[0].id}>) зашел в голосовой канал:'
+        embed_obj.add_field(name="Канал", value=f'{args[1].name} (<#{args[1].id}>)')
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'message_edit':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'[Сообщение]({args[2].jump_url}) было отредактировано:'
+        embed_obj.add_field(name="Старое содержимое:", value=f'```{args[1].content}```', inline=False)
+        embed_obj.add_field(name="Новое содержимое:", value=f'```{args[2].content}```', inline=False)
+
+        embed_obj.add_field(name="Автор", value=f'**{args[0].display_name}** (<@{args[0].id}>)')
+        embed_obj.add_field(name="Канал", value=f'**{args[2].channel.name}** (<#{args[2].channel.id}>)')
+
+        embed_obj.set_footer(text=f'id сообщения: {args[2].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'message_delete':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Сообщение было удалено:'
+        embed_obj.add_field(name="Содержимое:", value=f'```{args[1].content}```', inline=False)
+
+        embed_obj.add_field(name="Автор", value=f'**{args[0].display_name}** (<@{args[0].id}>)')
+        embed_obj.add_field(name="Канал", value=f'**{args[1].channel.name}** (<#{args[1].channel.id}>)')
+
+        embed_obj.set_footer(text=f'id сообщения: {args[1].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'role_remove':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Роли участника **{args[0].display_name}** (<@{args[0].id}>) были изменены:'
+        embed_obj.add_field(name="Удалена роль", value=f'**{args[1].name}** (<@&{args[1].id}>)')
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'role_add':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Роли участника **{args[0].display_name}** (<@{args[0].id}>) были изменены:'
+        embed_obj.add_field(name="Добавлена роль", value=f'**{args[1].name}** (<@&{args[1].id}>)')
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'name_changed':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Ник участника **{args[0].display_name}** (<@{args[0].id}>) был изменен:'
+        embed_obj.add_field(name="Старый ник", value=f'{args[1].display_name}')
+        embed_obj.add_field(name="Новый ник", value=f'{args[2].display_name}')
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'voice_muted':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участнику **{args[0].display_name}** (<@{args[0].id}>) был отключен микрофон.'
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'voice_unmuted':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участнику **{args[0].display_name}** (<@{args[0].id}>) был включен микрофон.'
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'voice_deaf':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участнику **{args[0].display_name}** (<@{args[0].id}>) был отключен звук.'
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'voice_undeaf':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участнику **{args[0].display_name}** (<@{args[0].id}>) был включен звук.'
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'user_ban':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участник **{args[0].display_name}** (<@{args[0].id}>) был забанен.'
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'user_unban':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участник **{args[0].display_name}** (<@{args[0].id}>) был разбанен.'
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'member_join':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участник **{args[0].display_name}** (<@{args[0].id}>) присоеденился к серверу.'
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+    elif audit_type == 'member_leave':
+        embed_obj = discord.Embed(color=Config.embedCol)
+        embed_obj.description = f'Участник **{args[0].display_name}** (<@{args[0].id}>) покинул сервер.'
+
+        embed_obj.set_footer(text=f'id участника: {args[0].id}')
+        await channel.send(embed=embed_obj)
+
+
+async def addMoneyToUser(user: discord.Member, guildId: int, sum: int, useMultiplier=True):
+    multiplier = 1.0
+    if useMultiplier:
+        multiplier = await getMultiplierFromMemberRoles(user, True)
+    row = DataBase.getDataFromDB('users', 'money', f'id={user.id} AND guild={guildId}')
+    money = 0
+    if row is not None:
+        money = row[0]
+    money += sum*multiplier
+    DataBase.updateDataInDB('users', f'money={int(money)}', f'id={user.id} AND guild={guildId}')
+    return sum*multiplier
+
+
+async def sendGuildBoostedMessage(user: discord.Member, guild: discord.guild, role: discord.Role):
+    embed_obj = discord.Embed(color=role.color)
+    embed_obj.description = f'<@{user.id}> спасибо за буст сервера! Мы ценим вашу поддержку.\nНа ваш счет добавлено **50.000** {Config.money_reaction}'
+
+    await guild.system_channel.send(embed=embed_obj)
+
+async def out_red(text):
+    print("\033[31m {}" .format(text))
+async def out_green(text):
+    print("\033[32m {}" .format(text))
+async def out_yellow(text):
+    print("\033[33m {}" .format(text))
+async def out_blue(text):
+    print("\033[34m {}" .format(text))
+async def out_white(text):
+    print("\033[37m {}" .format(text))

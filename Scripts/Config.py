@@ -1,13 +1,35 @@
 embedCol = 0x2F3136
-greenCol = 0x75DE4E
-yellowCol = 0xEECE54
-redCol = 0xE8526A
-blueCol = 0x1DA8E2
+redCol = 0xE8526A     # Old Colors:
+greenCol = 0x2F3136   # 0x75DE4E
+yellowCol = 0x2F3136  # 0xEECE54
+blueCol = 0x2F3136    # 0x1DA8E2
+boostCol = 0xAE57FF
 
 ok_reaction = '<:yes:831732305374347265>'
 cancel_reaction = '<:close:831732305667948594>'
 next_reaction = '<:next:831761280594608138>'
 previous_reaction = '<:previous:831761280607977493>'
+money_reaction = '<:money:864844121189777459>'
+reputation_reaction = '<:star:867779194128957471>'
+
+ok_emoji = 865576410148372500
+cancel_emoji = 865574986668048384
+next_emoji = 865575907007791135
+previous_emoji = 865575907506651146
+reputation_emoji = '⭐'
+
+rolesPerLevel = {10: 863594874560970782, 25: 863593032846802974, 40: 863593091906011177, 65: 863592730839220285, 100: 863595338034970652, 1000: 863595338034970652}
+levelDict = [10, 25, 40, 65, 100, 1000]
+
+reputationPr = 5
+reputationWarn = -10
+startReputation = 100
+
+moneyEveryday = 1500
+time_delete_msg = 900  # seconds
+
+hideExceptedErrorsList = ['commands.CommandNotFound']
+debugMode = False
 
 RANKS = {
 '1': 100,
